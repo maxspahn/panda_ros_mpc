@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+import rospy
+import numpy as np
+from std_msgs.msg import Float64MultiArray
+from sensor_msgs.msg import JointState
+
+from mpcSolverNoGravity import MpcSolverNoGravity
+
+
+class MpcNode:
+
+    def __init__(self):
+        dt = 0.1
+        N = 20
+        factor = 2.5
+        wu = np.ones(7) * factor
+        wu[0] = 0.700 * factor
+        wu[1] = 0.80 * factor
+        wu[2] = 1.0 * factor
+        wu[3] = 2.0 * factor
+        wu[4] = 8.0 * factor
+        wu[5] = 7.5 * factor
+        wu[6] = 25.0 * factor
+        self._mpcSolver = MpcSolverNoGravity(wu=wu, dt=dt, N=N)
+        rospy.init_node("mpc_node", anonymous=True)
+        self._rate = rospy.Rate(1/dt)
+        #self._pubs = [rospy.Publisher("panda_torque_controller_joint" + str(i) + "/command", Float64, queue_size=10) for i in range(1, 8)]
+        self._pub = rospy.Publisher("RobotActions", Float64MultiArray)
+        self._js_sub = rospy.Subscriber('/joint_states', JointState, self.js_cb)
+        self._js_des_sub = rospy.Subscriber('/GoalPositions', Float64MultiArray, self.js_des_cb)
+        self._pos_des = np.array([0.5, -np.pi/3, 0.2, -3.0 * np.pi/4.0, 0.0, np.pi/3.0, np.pi/5.0])
+        self._pos_des = np.array([0.0, -np.pi/4, 0.0, -3.0 * np.pi/4.0, 0.0, np.pi/2.0, np.pi/4.0])
+        self._pos = np.zeros(7)
+        self._vel = np.zeros(7)
+        self._pubMsg = Float64MultiArray(data=[0 for i in range(7)])
+
+    def js_cb(self, data):
+        for i in range(7):
+            self._pos[i] = data.position[i]
+            self._vel[i] = data.velocity[i]
+
+    def js_des_cb(self, data):
+        for i in range(7):
+            self._pos_des[i] = data.data[i]
+
+    def publish(self, action):
+        for i in range(7):
+            self._pubMsg.data[i] = action[i]
+            """
+            if i == 6:
+                self._pubMsg.data[i] = 0.5 * action[i]
+            """
+        self._pub.publish(self._pubMsg)
+
+    def run(self):
+        while not rospy.is_shutdown():
+            ob = np.concatenate((self._pos, self._vel))
+            print("distance : ", ob[0:7] - self._pos_des)
+            dist = np.linalg.norm(ob[0:7] - self._pos_des)
+            print("distance to target : ", dist)
+            self._mpcSolver.setGoal(self._pos_des)
+            action, info = self._mpcSolver.solve(ob)
+            self.publish(action)
+            self._rate.sleep()
+
+
+if __name__ == "__main__":
+    mpcnode = MpcNode()
+    try:
+        mpcnode.run()
+    except rospy.ROSInterruptException:
+        pass
+
+
+
